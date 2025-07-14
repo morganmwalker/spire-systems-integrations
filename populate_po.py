@@ -1,3 +1,6 @@
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.responses import HTMLResponse
+import io
 import requests
 from requests.auth import HTTPBasicAuth
 import json
@@ -25,8 +28,10 @@ qty_header = "Order Qty"
 cost_header = "Unit Price"
 
 # Important info for the user!
-print(f"Name your column headers \"{part_no_header}\", \"{qty_header}\", \"{cost_header}\" to ensure an accurate payload (case insenstive, order does not matter)")
-print(f"Note that this program OVERWRITES the existing purchase order items with the content of the csv file!\n")
+message_1 = f"Name your column headers <strong>{part_no_header}</strong>, <strong>{qty_header}</strong>, and <strong>{cost_header}</strong>"
+message_2 = f"Note that this program OVERWRITES the existing purchase order items with the content of the csv file!\n"
+
+# FUNCTIONS
 
 # Interprets the input as a Spire PO number and creates the request url
 def process_po_number(no):
@@ -37,12 +42,6 @@ def process_po_number(no):
     url_safe_json = urllib.parse.quote_plus(json_po)
     url = f"{root_url}/purchasing/orders/?filter={url_safe_json}&limit=50"
     return {"po_number": no, "url": url}
-
-# Prompts user for PO number
-def prompt_po_number():
-    # Ex. enter "64183"
-    no = input("Enter the order number: ")
-    return process_po_number(no)
 
 # Find the entered PO 
 def find_po(url):
@@ -59,32 +58,12 @@ def find_po(url):
             po = response_json["records"][0]
             return po
 
-# Prompts for a PO number until an existing one is found
-po = []
-while len(po) == 0:
-    d = prompt_po_number()
-    url = d["url"]
-    po_no = d["po_number"]
-    po = find_po(url)
-
-# Confirm if the first records result is the correct PO number 
-check = input(f"Is PO number {po[0]["number"]} correct? (Enter 'Y' for yes): ") 
-if check == 'Y' or check == 'y':
-    po_id = po[0]["id"]
-    put_url = f"{root_url}/purchasing/orders/{po_id}"
-else: 
-    raise SystemExit
-
-path = input("Enter the path to the csv file: ")
-while not os.path.exists(path): 
-    path = input(f"Could not find {path}, enter the path: ")
-
 # Function to create the payload from the csv file
-def create_payload(csv_file, part_no_header=part_no_header, cost_header=cost_header, qty_header=qty_header):
+def create_payload(csv_file: UploadFile, part_no_header=part_no_header, cost_header=cost_header, qty_header=qty_header):
     base_payload = {
         "items": []
     }
-    with open(csv_file, encoding="utf8", mode ='r') as file:
+    with io.TextIOWrapper(csv_file.file, encoding="utf-8", newline="") as file:
         csv_file = csv.reader(file)
 
         headers = next(csv_file)
@@ -113,17 +92,47 @@ def create_payload(csv_file, part_no_header=part_no_header, cost_header=cost_hea
             base_payload["items"].append(item)
     return base_payload
 
-try: 
-    payload = create_payload(path)
-except Exception as e:
-    print(e)
-    print("Failed to update PO")
-    raise SystemExit
+app = FastAPI()
 
-response = requests.put(put_url, json=payload, headers=headers, auth=auth)
+@app.get("/", response_class=HTMLResponse)
+async def upload_form():
+    return f"""
+    <html>
+        <body>
+            <h2>PO Import</h2>
+            <p>{message_1}<br>{message_2}</p>
+            <form action="/upload/" method="post" enctype="multipart/form-data">
+                PO Number: <input type="text" name="po_number"><br>
+                Upload a file: <input type="file" name="file"><br>
+                <input type="submit" value="Submit">
+            </form>
+        </body>
+    </html>
+    """
 
-if response.status_code == 200:
-    print(f"PO updated!")
-else:
-    print(response.text)
-print(f"Failed to update PO \nStatus code {response.status_code}")
+@app.post("/upload/")
+async def upload_file(po_number: str = Form(), file: UploadFile = File()):
+    # Form validation
+    if po_number == "":
+        raise HTTPException(status_code=422, detail="PO number is required")
+    
+    if not file.filename:
+        raise HTTPException(status_code=422, detail="File is required")
+    
+    processed_po_no = process_po_number(po_number)
+    po = find_po(processed_po_no["url"])
+
+    if not po:
+        raise HTTPException(status_code=404, detail="PO not found")
+    
+    po_id = po["id"]
+    put_url = f"{root_url}/purchasing/orders/{po_id}"
+
+    payload = create_payload(file)
+    response = requests.put(put_url, json=payload, headers=headers, auth=auth)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        message = f"Failed to update PO: {response.text}"
+        raise HTTPException(status_code=response.status_code, detail=message)
