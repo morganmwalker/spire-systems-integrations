@@ -28,10 +28,8 @@ cost_header = "Unit Price"
 print(f"Name your column headers \"{part_no_header}\", \"{qty_header}\", \"{cost_header}\" to ensure an accurate payload (case insenstive, order does not matter)")
 print(f"Note that this program OVERWRITES the existing purchase order items with the content of the csv file!\n")
 
-# Prompts user for PO number and creates the get request url
-def prompt_po_number():
-    # Ex. enter "64405"
-    no = input("Enter the order number: ")
+# Interprets the input as a Spire PO number and creates the request url
+def process_po_number(no):
     # PO numbers are always 10 digits, so pad the input with 0's
     po_number = no.zfill(10)
     po_number_json = {"number":po_number}
@@ -40,20 +38,34 @@ def prompt_po_number():
     url = f"{root_url}/purchasing/orders/?filter={url_safe_json}&limit=50"
     return {"po_number": no, "url": url}
 
+# Prompts user for PO number
+def prompt_po_number():
+    # Ex. enter "64183"
+    no = input("Enter the order number: ")
+    return process_po_number(no)
+
+# Find the entered PO 
+def find_po(url):
+    response = requests.get(url, headers=headers, auth=auth)
+    if response.status_code != 200:
+        print(f"Could not get PO {po_no}, Status code: {response.status_code}")
+        return []
+    else: 
+        response_json = response.json()
+        if not response_json["records"]:
+            print("No results found. Double-check the PO exists and is active")
+            return []
+        else:
+            po = response_json["records"][0]
+            return po
+
 # Prompts for a PO number until an existing one is found
 po = []
 while len(po) == 0:
     d = prompt_po_number()
     url = d["url"]
     po_no = d["po_number"]
-
-    response = requests.get(url, headers=headers, auth=auth)
-
-    if response.status_code != 200:
-        print(f"Could not get PO {po_no}, Status code: {response.status_code}")
-    else: 
-        response_json = response.json()
-        po = response_json["records"]
+    po = find_po(url)
 
 # Confirm if the first records result is the correct PO number 
 check = input(f"Is PO number {po[0]["number"]} correct? (Enter 'Y' for yes): ") 
