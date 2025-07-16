@@ -67,10 +67,14 @@ def create_payload(csv_file: UploadFile, part_no_header=part_no_header, cost_hea
         csv_file = csv.reader(file)
 
         headers = next(csv_file)
-        uppercase_headers = [header.upper() for header in headers]
-        part_no_column = uppercase_headers.index(part_no_header.upper())
-        unit_price_column = uppercase_headers.index(cost_header.upper())
-        order_qty_column = uppercase_headers.index(qty_header.upper())
+        uppercase_headers = {header.upper(): i for i, header in enumerate(headers)}
+        
+        part_no_column = uppercase_headers.get(part_no_header.upper())
+        unit_price_column = uppercase_headers.get(cost_header.upper())
+        order_qty_column = uppercase_headers.get(qty_header.upper())
+
+        if not part_no_column or not unit_price_column or not order_qty_column:
+            raise HTTPException(status_code=422, detail="Missing a required column") 
 
         for line_no, lines in enumerate(csv_file):
             part_no = lines[part_no_column]
