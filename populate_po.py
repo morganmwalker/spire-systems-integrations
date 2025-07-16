@@ -23,12 +23,13 @@ headers = {"accept": "application/json"}
 auth = HTTPBasicAuth(username, password)
 
 # Headers
-part_no_header = "Part No"
-qty_header = "Order Qty"
-cost_header = "Unit Price"
+required_headers = {
+        "PART NO", 
+        "ORDER QTY"
+        }
 
 # Important info for the user!
-message_1 = f"Name your column headers <strong>{part_no_header}</strong>, <strong>{qty_header}</strong>, and <strong>{cost_header}</strong>"
+message_1 = f"Name your column headers " + ", ".join(f"<strong>{header}</strong>" for header in required_headers) + " and <strong>UNIT PRICE</strong>"
 message_2 = f"Note that this program OVERWRITES the existing purchase order items with the content of the csv file!\n"
 
 # FUNCTIONS
@@ -59,7 +60,7 @@ def find_po(url):
             return po
 
 # Function to create the payload from the csv file
-def create_payload(csv_file: UploadFile, part_no_header=part_no_header, cost_header=cost_header, qty_header=qty_header):
+def create_payload(csv_file: UploadFile, required_headers):
     base_payload = {
         "items": []
     }
@@ -68,30 +69,25 @@ def create_payload(csv_file: UploadFile, part_no_header=part_no_header, cost_hea
 
         headers = next(csv_file)
         uppercase_headers = {header.upper(): i for i, header in enumerate(headers)}
+
+        for header in required_headers:
+            print(header)
+            if header not in uppercase_headers:
+                raise HTTPException(status_code=422, detail=f"Missing {header} column") 
         
-        part_no_column = uppercase_headers.get(part_no_header.upper())
-        unit_price_column = uppercase_headers.get(cost_header.upper())
-        order_qty_column = uppercase_headers.get(qty_header.upper())
-
-        if not part_no_column or not unit_price_column or not order_qty_column:
-            raise HTTPException(status_code=422, detail="Missing a required column") 
-
         for line_no, lines in enumerate(csv_file):
-            part_no = lines[part_no_column]
-            unit_price = lines[unit_price_column]
-            order_qty = lines[order_qty_column]
             # UOM autopopulates with stock UOM
             item = {
                 "inventory": {
                     "whse": "00", # Default warehouse is 00
-                    "partNo": part_no
+                    "partNo": lines[uppercase_headers.get("PART NO")]
                 },
-                "orderQty": order_qty
+                "orderQty": lines[uppercase_headers.get("ORDER QTY")]
             }
 
             # Use system cost if the unit price is not included in csv file
-            if unit_price != "":
-                item["unitPrice"] = unit_price
+            if uppercase_headers.get("UNIT PRICE"):
+                item["unitPrice"] = lines[uppercase_headers.get("UNIT PRICE")]
             
             base_payload["items"].append(item)
     return base_payload
@@ -132,7 +128,7 @@ async def upload_file(po_number: str = Form(), file: UploadFile = File()):
     po_id = po["id"]
     put_url = f"{root_url}/purchasing/orders/{po_id}"
 
-    payload = create_payload(file)
+    payload = create_payload(file, required_headers)
     response = requests.put(put_url, json=payload, headers=headers, auth=auth)
 
     if response.status_code == 200:
