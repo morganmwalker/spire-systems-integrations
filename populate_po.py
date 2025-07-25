@@ -29,19 +29,24 @@ required_headers = {
         }
 
 # Important info for the user!
-message_1 = f"Name your column headers " + ", ".join(f"<strong>{header}</strong>" for header in required_headers) + " and <strong>UNIT PRICE</strong>"
+message_1 = f"Name your column headers " + ", ".join(f"<strong>{header}</strong>" for header in required_headers) + ", <strong>DESCRIPTION</strong> and <strong>UNIT PRICE</strong>"
 message_2 = f"Note that this program OVERWRITES the existing purchase order items with the content of the csv file!\n"
 
 # FUNCTIONS
+
+# Returns URL filters for Spire's API given the key and value
+def format_json(key, value):
+    url_filter = {key:value}
+    filter_json = json.dumps(url_filter)
+    url_safe_json = urllib.parse.quote_plus(filter_json)
+    return f"filter={url_safe_json}"
 
 # Interprets the input as a Spire PO number and creates the request url
 def process_po_number(no):
     # PO numbers are always 10 digits, so pad the input with 0's
     po_number = no.zfill(10)
-    po_number_json = {"number":po_number}
-    json_po = json.dumps(po_number_json)
-    url_safe_json = urllib.parse.quote_plus(json_po)
-    url = f"{root_url}/purchasing/orders/?filter={url_safe_json}&limit=50"
+    po_filter = format_json("number", po_number)
+    url = f"{root_url}/purchasing/orders/?{po_filter}"
     return {"po_number": no, "url": url}
 
 # Find the entered PO 
@@ -59,8 +64,34 @@ def find_po(url):
             po = response_json["records"][0]
             return po
 
+# Creates item in inventory
+def create_inventory_item(part_no, description, cost):
+    url = f"{root_url}/inventory/items/"
+    payload = {
+        "pricing": { "EA": { "sellPrices": [round(cost/0.55, 2)] } },
+        "partNo": part_no,
+        "description": description,
+        "whse": "00",
+        "currentCost": cost
+    }
+    response = requests.post(url, json=payload, headers=headers, auth=auth)
+    if response.status_code != 201:
+        print(f"Failed to create inventory item {part_no}, status code: {response.status_code}\n{response.text}")
+        return None
+    else:
+        return response.text
+
+def item_exists(part_no):
+    part_no_filter = format_json("partNo", part_no)
+    url = f"{root_url}/inventory/items/?{part_no_filter}"
+    response = requests.get(url, headers=headers, auth=auth)
+    if response.status_code == 200 and response.json()["records"] != []:
+        return True
+    else:
+        return False
+
 # Function to create the payload from the csv file
-def create_payload(csv_file: UploadFile, required_headers):
+def create_payload(csv_file: UploadFile, required_headers, create_inventory: bool):
     base_payload = {
         "items": []
     }
@@ -73,21 +104,36 @@ def create_payload(csv_file: UploadFile, required_headers):
         for header in required_headers:
             if header not in uppercase_headers:
                 raise HTTPException(status_code=422, detail=f"Missing {header} column") 
-        
+ 
         for line_no, lines in enumerate(csv_file):
             # UOM autopopulates with stock UOM
+            part_no = lines[uppercase_headers["PART NO"]].strip()
+            order_qty = lines[uppercase_headers["ORDER QTY"]].strip()
+            unit_price = float(lines[uppercase_headers.get("UNIT PRICE")].strip()) if "UNIT PRICE" in uppercase_headers else None
+            description = lines[uppercase_headers.get("DESCRIPTION")].strip() if "DESCRIPTION" in uppercase_headers else ""
+            
+            if create_inventory and not item_exists(part_no):
+                if description: 
+                    print(f"Creating inventory item {part_no}")
+                    try: 
+                        create_inventory_item(part_no, description, unit_price)
+                    except Exception as e:
+                        raise HTTPException(status_code=400, detail=f"Error creating {part_no}: {e}") 
+                else:
+                    print(f"{part_no} needs a description to be created!")
+            
             item = {
                 "inventory": {
                     "whse": "00", # Default warehouse is 00
-                    "partNo": lines[uppercase_headers.get("PART NO")].strip()
+                    "partNo": part_no
                 },
-                "orderQty": lines[uppercase_headers.get("ORDER QTY")].strip()
+                "orderQty": order_qty
             }
+            if unit_price:
+                item["unitPrice"] = unit_price
+            if description:
+                item["description"] = description
 
-            # Use system cost if the unit price is not included in csv file
-            if uppercase_headers.get("UNIT PRICE"):
-                item["unitPrice"] = lines[uppercase_headers.get("UNIT PRICE")].strip()
-            
             base_payload["items"].append(item)
     return base_payload
 
@@ -103,6 +149,7 @@ async def upload_form():
             <form action="/upload/" method="post" enctype="multipart/form-data">
                 PO Number: <input type="text" name="po_number"><br>
                 Upload a file: <input type="file" name="file"><br>
+                Create inventory items if not found<input type="checkbox" name="create_inventory" /><br><br>
                 <input type="submit" value="Submit">
             </form>
         </body>
@@ -110,14 +157,14 @@ async def upload_form():
     """
 
 @app.post("/upload/")
-async def upload_file(po_number: str = Form(), file: UploadFile = File()):
+async def upload_file(po_number: str = Form(), file: UploadFile = File(), create_inventory: bool = Form(None)):
     # Form validation
     if po_number == "":
         raise HTTPException(status_code=422, detail="PO number is required")
     
     if not file.filename:
         raise HTTPException(status_code=422, detail="File is required")
-    
+
     processed_po_no = process_po_number(po_number)
     po = find_po(processed_po_no["url"])
 
@@ -127,7 +174,7 @@ async def upload_file(po_number: str = Form(), file: UploadFile = File()):
     po_id = po["id"]
     put_url = f"{root_url}/purchasing/orders/{po_id}"
 
-    payload = create_payload(file, required_headers)
+    payload = create_payload(file, required_headers, create_inventory)
     response = requests.put(put_url, json=payload, headers=headers, auth=auth)
 
     if response.status_code == 200:
