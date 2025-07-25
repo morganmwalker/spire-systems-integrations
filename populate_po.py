@@ -71,7 +71,6 @@ def create_payload(csv_file: UploadFile, required_headers):
         uppercase_headers = {header.upper(): i for i, header in enumerate(headers)}
 
         for header in required_headers:
-            print(header)
             if header not in uppercase_headers:
                 raise HTTPException(status_code=422, detail=f"Missing {header} column") 
         
@@ -80,14 +79,14 @@ def create_payload(csv_file: UploadFile, required_headers):
             item = {
                 "inventory": {
                     "whse": "00", # Default warehouse is 00
-                    "partNo": lines[uppercase_headers.get("PART NO")]
+                    "partNo": lines[uppercase_headers.get("PART NO")].strip()
                 },
-                "orderQty": lines[uppercase_headers.get("ORDER QTY")]
+                "orderQty": lines[uppercase_headers.get("ORDER QTY")].strip()
             }
 
             # Use system cost if the unit price is not included in csv file
             if uppercase_headers.get("UNIT PRICE"):
-                item["unitPrice"] = lines[uppercase_headers.get("UNIT PRICE")]
+                item["unitPrice"] = lines[uppercase_headers.get("UNIT PRICE")].strip()
             
             base_payload["items"].append(item)
     return base_payload
