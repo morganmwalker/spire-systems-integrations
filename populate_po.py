@@ -107,10 +107,13 @@ def create_payload(csv_file: UploadFile, required_headers, create_inventory: boo
  
         for line_no, lines in enumerate(csv_file):
             # UOM autopopulates with stock UOM
-            part_no = lines[uppercase_headers["PART NO"]].strip()
-            order_qty = lines[uppercase_headers["ORDER QTY"]].strip()
-            unit_price = float(lines[uppercase_headers.get("UNIT PRICE")].strip()) if "UNIT PRICE" in uppercase_headers else None
-            description = lines[uppercase_headers.get("DESCRIPTION")].strip() if "DESCRIPTION" in uppercase_headers else ""
+            try:
+                part_no = lines[uppercase_headers["PART NO"]].strip()
+                order_qty = lines[uppercase_headers["ORDER QTY"]].strip()
+                unit_price = float(lines[uppercase_headers.get("UNIT PRICE")].strip()) if "UNIT PRICE" in uppercase_headers else None
+                description = lines[uppercase_headers.get("DESCRIPTION")].strip() if "DESCRIPTION" in uppercase_headers else ""
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error geting values for {part_no}: {e}") 
             
             if create_inventory and not item_exists(part_no):
                 if description: 
